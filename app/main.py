@@ -3,6 +3,9 @@ import os
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from uuid import uuid4
+from sqlmodel import Session, select
+from app.db.database import engine, SessionDep
+from app.models import Task, PomodoroSession
 
 #coś importy szwankowały czasem w api czasem wąż się buntował
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,7 +25,7 @@ async def read_root():
 
 
 @app.post("/tasks")
-async def create_task(title: str, description: str="brak opisu",status: str = "do wykonania"):
+async def create_task(session: SessionDep,title: str, description: str="brak opisu",status: str = "do wykonania"):
     TaskTools.task_crate_validator(title, description, status,tasks_list)
     task_id = uuid4()
     task = {
@@ -33,9 +36,12 @@ async def create_task(title: str, description: str="brak opisu",status: str = "d
 
     }
     tasks_list.append(task)
+    session.add(new_task)
+    session.commit()
+    session.refresh(new_task)
     return f"List updeted with task: {task}"
 @app.get("/tasks")
-async def get_tasks(status:str | None=None):
+async def get_tasks(session: SessionDep,status:str | None=None):
     if status == None:
         return tasks_list
     else:
@@ -43,14 +49,14 @@ async def get_tasks(status:str | None=None):
         return [task for task in tasks_list if task["status"] == status]
 
 @app.get("/tasks/{task_id}")
-async def get_task_details(task_id:str):
+async def get_task_details(session: SessionDep,task_id:str):
     TaskTools.task_by_id_validator(task_id,tasks_list)
     for task in tasks_list:
         if str(task["id"]) == str(task_id):
             return task
 
 @app.put("/tasks/{task_id}")
-async def update_task(task_id: str, title: str, description: str, status: str):
+async def update_task(session: SessionDep,task_id: str, title: str, description: str, status: str):
     TaskTools.task_by_id_validator(task_id,tasks_list)
     TaskTools.task_crate_validator(title,description,status,tasks_list)
     for task in tasks_list:
@@ -61,7 +67,7 @@ async def update_task(task_id: str, title: str, description: str, status: str):
             return f"Task updated: {task}"
 
 @app.delete("/tasks/{task_id}")
-async def delete_task(task_id: str):
+async def delete_task(session: SessionDep,task_id: str):
     TaskTools.task_by_id_validator(task_id,tasks_list)
     for task in tasks_list:
         if str(task["id"]) == str(task_id):
@@ -69,7 +75,7 @@ async def delete_task(task_id: str):
             return f"Task deleted: {task}"
 
 @app.post("/pomodoro")
-async def create_pomodoro_timer(task_id:str,timer:int=25):
+async def create_pomodoro_timer(session: SessionDep,task_id:str,timer:int=25):
     TaskTools.task_by_id_validator(task_id,tasks_list)
     PomodoroTools.pomodoro_create_validator(task_id,pomodoro_list)
     start_time = datetime.now()
@@ -85,7 +91,7 @@ async def create_pomodoro_timer(task_id:str,timer:int=25):
     return f"Pomodoro created: {pomodoro}"
 
 @app.post("/pomodoro/{task_id}/stop")
-async def stop_pomodoro(task_id: str):
+async def stop_pomodoro(session: SessionDep,task_id: str):
     TaskTools.task_by_id_validator(task_id,tasks_list)
     PomodoroTools.pomodoro_stopper_validator(task_id,pomodoro_list)
     for pomodoro in pomodoro_list:
@@ -95,7 +101,7 @@ async def stop_pomodoro(task_id: str):
             return f"Pomodoro stopped: {pomodoro}"
 
 @app.get("/pomodoro/stats")
-async def get_pomodoro_stats():
+async def get_pomodoro_stats(session: SessionDep):
     alltask_time = timedelta()
     data = []
     for task in tasks_list:
