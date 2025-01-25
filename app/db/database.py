@@ -1,7 +1,11 @@
 from sqlmodel import SQLModel, create_engine, Session
 from fastapi import Depends
 from typing_extensions import Annotated
+from dotenv import load_dotenv
 import os
+
+
+load_dotenv()
 
 if os.getenv("ENVIRONMENT") == "development":
     DATABASE_URL = "sqlite:///./database.db"
