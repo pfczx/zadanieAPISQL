@@ -38,7 +38,7 @@ class TaskTools:
         print(id_num)
         checker = False
         for task in task_list:
-            print(f"id taska:{str(task["id"])},,,,,id podane:{str(id_num)}")
+            print(f"id taska:{str(task['id'])},,,,,id podane:{str(id_num)}")
             if str(task["id"]) == str(id_num):
                 checker = True
         if not checker:
