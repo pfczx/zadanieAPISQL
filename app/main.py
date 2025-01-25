@@ -1,11 +1,15 @@
 import sys
 import os
 from datetime import datetime, timedelta
+
+from dns.e164 import query
 from fastapi import FastAPI
 from uuid import uuid4
+
 from sqlmodel import Session, select
 from app.db.database import engine, SessionDep
 from app.models import Task, PomodoroSession
+from app.tools.validationtools import TaskTools, PomodoroTools
 
 #coś importy szwankowały czasem w api czasem wąż się buntował
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -16,7 +20,10 @@ app = FastAPI()
 tasks_list = []
 pomodoro_list = []
 
-
+@app.on_event("startup")
+def on_startup():
+    if "sqlite" in str(engine.url):
+        SQLModel.metadata.create_all(engine)
 @app.get("/")
 async def read_root():
     #w swaggerze sie nie pokaze to co ma byc :) trzeba w przegldarce"
@@ -27,7 +34,7 @@ async def read_root():
 @app.post("/tasks")
 async def create_task(session: SessionDep,title: str, description: str="brak opisu",status: str = "do wykonania"):
     TaskTools.task_crate_validator(title, description, status,tasks_list)
-    task_id = uuid4()
+    task_id = str(uuid4())
     task = {
         "id":task_id,
         "title": title,
@@ -36,24 +43,33 @@ async def create_task(session: SessionDep,title: str, description: str="brak opi
 
     }
     tasks_list.append(task)
-    session.add(new_task)
+
+    db_task = Task(
+        id=str(task_id),
+        title=title,
+        description=description,
+        status=status
+    )
+    session.add(db_task)
     session.commit()
-    session.refresh(new_task)
-    return f"List updeted with task: {task}"
+    session.refresh(db_task)
+
+    return f"updated with task: {task}"
 @app.get("/tasks")
 async def get_tasks(session: SessionDep,status:str | None=None):
+
     if status == None:
-        return tasks_list
+        return session.exec(select(Task)).all()
     else:
         TaskTools.status_validator(status)
-        return [task for task in tasks_list if task["status"] == status]
+        return session.exec(select(Task).where(Task.status == status)).all()
 
 @app.get("/tasks/{task_id}")
 async def get_task_details(session: SessionDep,task_id:str):
+
     TaskTools.task_by_id_validator(task_id,tasks_list)
-    for task in tasks_list:
-        if str(task["id"]) == str(task_id):
-            return task
+
+    return session.get(Task, task_id)
 
 @app.put("/tasks/{task_id}")
 async def update_task(session: SessionDep,task_id: str, title: str, description: str, status: str):
@@ -64,7 +80,17 @@ async def update_task(session: SessionDep,task_id: str, title: str, description:
             task["title"] = title
             task["description"] = description
             task["status"] = status
-            return f"Task updated: {task}"
+
+
+    task = session.get(Task, task_id)
+    task.title = title
+    task.description = description
+    task.status = status
+
+    session.commit()
+    session.refresh(task)
+
+    return task
 
 @app.delete("/tasks/{task_id}")
 async def delete_task(session: SessionDep,task_id: str):
@@ -72,14 +98,19 @@ async def delete_task(session: SessionDep,task_id: str):
     for task in tasks_list:
         if str(task["id"]) == str(task_id):
             tasks_list.remove(task)
-            return f"Task deleted: {task}"
+
+    task = session.get(Task, task_id)
+    session.delete(task)
+    session.commit()
+
+    return "deleted " + str(task)
 
 @app.post("/pomodoro")
-async def create_pomodoro_timer(session: SessionDep,task_id:str,timer:int=25):
+async def create_pomodoro_timer(session: SessionDep,task_id:str):
     TaskTools.task_by_id_validator(task_id,tasks_list)
     PomodoroTools.pomodoro_create_validator(task_id,pomodoro_list)
     start_time = datetime.now()
-    end_time = start_time + timedelta(minutes=timer)
+    end_time = start_time + timedelta(minutes=25)
     completed = False
     pomodoro = {
         "id":task_id,
@@ -88,6 +119,20 @@ async def create_pomodoro_timer(session: SessionDep,task_id:str,timer:int=25):
         "completed":completed
     }
     pomodoro_list.append(pomodoro)
+
+    task = session.get(Task, task_id)
+
+
+    new_pomodoro = PomodoroSession(
+        task_id=str(task_id),
+        start_time=start_time,
+        end_time=start_time + timedelta(minutes=25)
+    )
+
+    session.add(new_pomodoro)
+    session.commit()
+    session.refresh(new_pomodoro)
+
     return f"Pomodoro created: {pomodoro}"
 
 @app.post("/pomodoro/{task_id}/stop")
@@ -98,7 +143,17 @@ async def stop_pomodoro(session: SessionDep,task_id: str):
         if str(pomodoro["id"]) == str(task_id):
             pomodoro["completed"] = True
             pomodoro["end_time"] = datetime.now()
-            return f"Pomodoro stopped: {pomodoro}"
+
+    pomodoro = session.get(PomodoroSession, task_id)
+    pomodoro.completed = True
+    pomodoro.end_time = datetime.now()
+
+    session.commit()
+    session.refresh(task)
+
+
+
+    return f"Pomodoro stopped: {pomodoro}"
 
 @app.get("/pomodoro/stats")
 async def get_pomodoro_stats(session: SessionDep):
@@ -115,7 +170,24 @@ async def get_pomodoro_stats(session: SessionDep):
     for pomodoro in pomodoro_list:
         if pomodoro["completed"]:
             alltask_time += pomodoro["end_time"] - pomodoro["start_time"]
-    return f"Łącznie spędzony czas to: {alltask_time}, statystyki zadań: {data}"
+    #return f"Łącznie spędzony czas to: {alltask_time}, statystyki zadań: {data}"
+
+    completed_sessions = session.exec(select(PomodoroSession).where(PomodoroSession.completed == True)).all()
+
+    total_time = sum((session.end_time - session.start_time for session in completed_sessions),timedelta())
+
+    stats = []
+    tasks = session.exec(select(Task)).all()
+
+    for task in tasks:
+        task_session = session.exec(select(PomodoroSession).where(PomodoroSession.id == task.id)).where(PomodoroSession.completed == True).all()
+
+        stats.append({
+            "id": task.id,
+            "completed_sessions_for_task":len(task_session),
+            "total_time_for_task": sum((session.end_time - session.start_time for session in task_sessions),timedelta())
+
+        })
 
 
 
