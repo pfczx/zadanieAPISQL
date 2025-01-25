@@ -22,8 +22,8 @@ pomodoro_list = []
 
 @app.on_event("startup")
 def on_startup():
-    if "sqlite" in str(engine.url):
-        SQLModel.metadata.create_all(engine)
+
+    SQLModel.metadata.create_all(engine)
 
     with Session(engine) as session:
         tasks = session.exec(select(Task)).all()
